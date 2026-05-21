@@ -30,31 +30,29 @@ pip install -r requirements.txt
 ### 📂 Folder I/O
 
 #### Folder Image Loader
-Batch load images from a folder with built-in thumbnail preview and native folder picker dialog.
+Load all images from a folder in LIST mode — each image is sent individually to downstream nodes. Includes built-in thumbnail preview and native folder picker dialog.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `folder_path` | STRING | Path to image folder |
-| `sort_by` | Enum | Sort by: `name` / `date` / `size` |
-| `start_index` | INT | Start index (0-based) |
-| `max_images` | INT | Max images to load (0 = all) |
 
-**Outputs:** `images` / `masks` / `filenames_json` / `total_count`
+**Outputs:** `image` / `mask` / `filename` (one per image, downstream nodes execute per image automatically)
 
 Supported formats: `.png .jpg .jpeg .webp .bmp .tiff .tif .gif`
 
 ---
 
 #### Batch Image Saver
-Save images to a specified folder. Automatically creates a `prefix_timestamp` subfolder on each run.
+Save images to a specified folder. Can receive filenames from Folder Image Loader to preserve original names.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `images` | IMAGE | Image batch to save |
-| `output_folder` | STRING | Root output directory |
-| `filename_prefix` | STRING | Filename prefix |
-| `format` | Enum | `png` / `jpg` / `webp` |
-| `quality` | INT | JPG/WEBP quality (1-100) |
+| `output_folder` | STRING | Output directory (absolute or relative to ComfyUI output) |
+| `file_format` | Enum | `png` / `jpg` / `webp` |
+| `quality` | INT | JPG/WEBP quality (1-100, ignored for PNG) |
+| `embed_workflow` | BOOLEAN | Embed workflow metadata into PNG |
+| `original_filename` | STRING | Optional — connect Folder Image Loader's filename to preserve original names |
 
 ---
 
