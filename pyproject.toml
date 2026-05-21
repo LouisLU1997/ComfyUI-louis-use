@@ -15,4 +15,4 @@ Repository = "https://github.com/LouisLU1997/ComfyUI-louis-use"
 [tool.comfy]
 PublisherId = "louislu"
 DisplayName = "Louis Use"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/LouisLU1997/ComfyUI-louis-use/main/logo.png"
