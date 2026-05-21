@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-louis-use"
 description = "ComfyUI utility nodes: folder I/O, image crop, color tools, seamless tile, text-driven segmentation and more."
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
     "transformers>=4.30.0",
     "huggingface_hub>=0.16.0",
