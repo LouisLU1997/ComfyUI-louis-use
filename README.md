@@ -1,4 +1,6 @@
-# Louis Use — ComfyUI Custom Nodes
+**[English](README_en.md) | 中文**
+
+# Louis Use — ComfyUI 自定义节点
 
 一组实用的 ComfyUI 自定义节点，涵盖文件夹批量 I/O、图像裁剪、色彩工具、无缝贴图、文字驱动抠图等常用功能。
 
@@ -12,7 +14,7 @@
 **方法二：手动克隆**
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/comfyui-louis-use Louis_use
+git clone https://github.com/LouisLU1997/ComfyUI-louis-use Louis_use
 # 重启 ComfyUI
 ```
 
@@ -152,22 +154,7 @@ pip install -r requirements.txt
 | `transformers` | Text Segmenter / Text Segmented Depth |
 | `huggingface_hub` | 模型自动下载 |
 | `torchvision` | Text Segmenter 预处理 |
-| `aiohttp` | 后端 API 路由（文件夹对话框 / 缩略图） |
-
----
-
-## 文件结构
-
-```
-Louis_use/
-├── __init__.py          节点注册 + API 挂载
-├── nodes.py             所有节点实现
-├── api.py               后端路由（文件夹对话框 / 缩略图预览 / 图片计数）
-├── js/
-│   └── folder_io.js     前端扩展（缩略图画布、滚轮、文件夹选择按钮）
-├── requirements.txt
-└── pyproject.toml
-```
+| `aiohttp` | 后端 API 路由 |
 
 ---
 
