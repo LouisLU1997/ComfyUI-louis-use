@@ -1733,7 +1733,8 @@ class TextSegmentedDepth:
                     pad = 0.08
                     for box in boxes:
                         x1, y1, x2, y2 = box.tolist()
-                        pw = (x2 - x1) * pad;  ph = (y2 - y1) * pad
+                        pw = (x2 - x1) * pad
+                        ph = (y2 - y1) * pad
                         crop_boxes.append((
                             max(0, int(x1 - pw)), max(0, int(y1 - ph)),
                             min(W, int(x2 + pw)), min(H, int(y2 + ph)),
@@ -2481,3 +2482,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_IDGTE_DISPLAY,
     **_IPG_DISPLAY,
 }
+

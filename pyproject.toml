@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "comfyui-louis-use"
 version = "1.0.2"
 description = "Practical ComfyUI utility nodes for folder I/O, image tools, color matching, seamless textures, prompt conversion, performance tracking, and optional QwenVL screening."
@@ -15,7 +15,7 @@ dependencies = [
 Repository = "https://github.com/LouisLU1997/ComfyUI-louis-use"
 
 [tool.comfy]
-PublisherId = "louis"
+PublisherId = "louislu"
 DisplayName = "Louis Use"
 Icon = ""
 Tags = ["image", "folder", "crop", "color", "segmentation", "seamless", "utility", "qwenvl"]
