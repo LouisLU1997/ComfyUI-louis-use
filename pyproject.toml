@@ -1,18 +1,25 @@
 [project]
 name = "comfyui-louis-use"
-description = "ComfyUI utility nodes: folder I/O, image crop, color tools, seamless tile, text-driven segmentation and more."
-version = "1.0.1"
+version = "1.0.0"
+description = "A collection of ComfyUI utility nodes: folder I/O, image crop, color tools, seamless tile, text-driven segmentation and more."
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.9"
 dependencies = [
+    "torch>=2.0.0",
+    "Pillow>=9.0.0",
+    "numpy>=1.24.0",
     "transformers>=4.30.0",
     "huggingface_hub>=0.16.0",
     "torchvision>=0.15.0",
+    "aiohttp>=3.8.0",
 ]
 
 [project.urls]
-Repository = "https://github.com/LouisLU1997/ComfyUI-louis-use"
-# Used by Comfy Registry https://comfyregistry.org
+Repository = "https://github.com/YOUR_USERNAME/comfyui-louis-use"
 
 [tool.comfy]
-PublisherId = "louislu"
+PublisherId = "louis"
 DisplayName = "Louis Use"
-Icon = "https://raw.githubusercontent.com/LouisLU1997/ComfyUI-louis-use/main/logo.png"
+Icon = ""
+Tags = ["image", "folder", "crop", "color", "segmentation", "seamless", "utility"]

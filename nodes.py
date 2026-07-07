@@ -5,11 +5,13 @@ ComfyUI Folder I/O Nodes
 """
 
 import os
+import sys
 import re
-import json
+import json as json_module
 import random
 import hashlib
 import time
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -78,6 +80,153 @@ def make_output_folder(base_folder: str, prefix: str) -> Path:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 节点 — FolderTextLoader（批量读取 txt 文件）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ResolutionSelector:
+    """
+    分辨率选择器（Louis 版）。
+    选择宽高比 + 百万像素，输出宽度、高度，以及可直接接入
+    Ideogram4 Text Encode 的 aspect_ratio 字符串（如 "16:9"）。
+    尺寸自动对齐到 64 的倍数。
+    """
+
+    _RATIOS = {
+        # 方形
+        "1:1 正方形":  (1,  1),
+        # 横版
+        "16:9 横屏":   (16, 9),
+        "16:10 横屏":  (16, 10),
+        "4:3 横屏":    (4,  3),
+        "3:2 横屏":    (3,  2),
+        "5:4 横屏":    (5,  4),
+        "2:1 超宽":    (2,  1),
+        "21:9 超宽":   (21, 9),
+        "3:1 超宽":    (3,  1),
+        # 竖版
+        "9:16 竖屏":   (9,  16),
+        "10:16 竖屏":  (10, 16),
+        "3:4 竖屏":    (3,  4),
+        "2:3 竖屏":    (2,  3),
+        "4:5 竖屏":    (4,  5),
+        "1:2 竖屏":    (1,  2),
+        "9:21 超高":   (9,  21),
+        "1:3 超高":    (1,  3),
+    }
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "宽高比": (list(cls._RATIOS.keys()), {"default": "16:9"}),
+                "百万像素": ("FLOAT", {
+                    "default": 2.0, "min": 0.1, "max": 16.0, "step": 0.1,
+                    "display": "slider",
+                    "tooltip": "输出图像的目标像素总量（百万），宽高由宽高比自动分配",
+                }),
+            },
+            "optional": {
+                "aspect_ratio": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "接 Ideogram4 Text Encode 的 aspect_ratio 输出，覆盖上方宽高比下拉框",
+                }),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, 宽高比, **kwargs):
+        # 兼容旧工作流保存的纯数字比例（如 "16:9"），不报 "Value not in list"
+        return True
+
+    RETURN_TYPES  = ("INT", "INT")
+    RETURN_NAMES  = ("宽度", "高度")
+    FUNCTION      = "calc"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = "根据宽高比和百万像素计算输出分辨率；可接 Ideogram4 Text Encode 的 aspect_ratio 统一控制"
+
+    def calc(self, 宽高比: str, 百万像素: float, aspect_ratio: str = ""):
+        import math, re
+        ar = aspect_ratio.strip() if aspect_ratio and aspect_ratio.strip() else 宽高比
+        # 先精确匹配（中文标签），再正则解析（兼容纯 "16:9" 字符串）
+        if ar in self._RATIOS:
+            rw, rh = self._RATIOS[ar]
+        else:
+            m = re.search(r'(\d+):(\d+)', ar)
+            if m:
+                rw, rh = int(m.group(1)), int(m.group(2))
+            else:
+                rw, rh = self._RATIOS[宽高比]
+        total  = 百万像素 * 1_000_000
+        w = max(64, round(math.sqrt(total * rw / rh) / 64) * 64)
+        h = max(64, round(total / w / 64) * 64)
+        print(f"[ResolutionSelector] {ar} @ {百万像素}MP → {w}×{h}")
+        return (w, h)
+
+
+class FolderTextLoader:
+    """
+    从指定文件夹批量读取所有 .txt 文件，以 LIST 模式逐条输出文本内容。
+    适合：把一批 txt 描述文件送入 Ideogram4TextEncode 等文本处理节点。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "folder_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "txt 文件所在文件夹，如 D:/prompts",
+                }),
+            },
+        }
+
+    RETURN_TYPES    = ("STRING", "STRING")
+    RETURN_NAMES    = ("text", "filename")
+    OUTPUT_IS_LIST  = (True, True)
+    FUNCTION        = "load_texts"
+    CATEGORY        = "Louis_use"
+    DESCRIPTION     = "批量读取文件夹内所有 .txt 文件，逐条输出文本内容和文件名"
+
+    def load_texts(self, folder_path: str):
+        folder = Path(folder_path.strip())
+        if not folder.exists():
+            raise FileNotFoundError(f"文件夹不存在: {folder}")
+
+        paths = sorted(folder.rglob("*.txt"), key=lambda p: p.name)
+        if not paths:
+            raise ValueError(f"文件夹中没有找到 .txt 文件: {folder}")
+
+        texts, filenames = [], []
+        for p in paths:
+            try:
+                content = p.read_text(encoding="utf-8").strip()
+                texts.append(content)
+                filenames.append(p.name)
+                print(f"[FolderTextLoader] 读取: {p.name} ({len(content)} 字符)")
+            except Exception as e:
+                print(f"[FolderTextLoader] 跳过 {p.name}: {e}")
+
+        if not texts:
+            raise RuntimeError("所有 txt 文件均无法读取")
+
+        print(f"[FolderTextLoader] 共 {len(texts)} 个文件")
+        return (texts, filenames)
+
+    @classmethod
+    def IS_CHANGED(cls, folder_path):
+        try:
+            folder = Path(folder_path.strip())
+            h = hashlib.md5()
+            for p in sorted(folder.rglob("*.txt"), key=lambda p: p.name):
+                h.update(p.name.encode())
+                h.update(str(p.stat().st_mtime).encode())
+            return h.hexdigest()
+        except Exception:
+            return float("nan")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 节点 1 — FolderImageLoader
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -97,12 +246,12 @@ class FolderImageLoader:
             },
         }
 
-    RETURN_TYPES   = ("IMAGE", "MASK", "STRING")
-    RETURN_NAMES   = ("image", "mask", "filename")
-    OUTPUT_IS_LIST = (True, True, True)
+    RETURN_TYPES   = ("IMAGE", "MASK", "STRING", "STRING")
+    RETURN_NAMES   = ("image", "mask", "filename", "txt")
+    OUTPUT_IS_LIST = (True, True, True, True)
     FUNCTION       = "load_images"
     CATEGORY       = "Louis_use"
-    DESCRIPTION    = "读取文件夹内全部图片，逐张送入下游节点；图片总数显示在节点状态栏"
+    DESCRIPTION    = "读取文件夹内全部图片，逐张送入下游节点；同名 .txt/.json 文件内容从 txt 输出"
 
     def load_images(self, folder_path: str):
         paths = collect_images(folder_path, "name")
@@ -111,7 +260,7 @@ class FolderImageLoader:
         if total == 0:
             raise ValueError(f"文件夹中没有找到支持格式的图片: {folder_path}")
 
-        images, masks, filenames = [], [], []
+        images, masks, filenames, texts = [], [], [], []
         for p in paths:
             try:
                 img = Image.open(p)
@@ -120,6 +269,17 @@ class FolderImageLoader:
                 images.append(pil_to_tensor(img))
                 masks.append(pil_to_mask(img))
                 filenames.append(os.path.basename(p))
+
+                # 读取同名 .txt 或 .json（优先 .json）
+                stem = Path(p).with_suffix("")
+                txt_content = ""
+                for ext in (".json", ".txt"):
+                    txt_file = Path(str(stem) + ext)
+                    if txt_file.exists():
+                        txt_content = txt_file.read_text(encoding="utf-8")
+                        break
+                texts.append(txt_content)
+
             except Exception as e:
                 print(f"[FolderImageLoader] 跳过损坏图片 {p}: {e}")
 
@@ -127,7 +287,7 @@ class FolderImageLoader:
             raise RuntimeError("所有图片均无法读取，请检查文件完整性")
 
         print(f"[FolderImageLoader] 共 {total} 张，逐张送入下游节点")
-        return (images, masks, filenames)
+        return (images, masks, filenames, texts)
 
     @classmethod
     def IS_CHANGED(cls, folder_path):
@@ -416,10 +576,11 @@ class DivisibleCrop:
 
     # 模型 → VAE 下采样步长（即宽高必须能被该数整除）
     _MODEL_MULTIPLES = {
-        "SD1.5 (8)":   8,
-        "SDXL (8)":    8,
-        "SD3 (16)":    16,
-        "Flux (16)":   16,
+        "SD1.5 (8)":    8,
+        "SDXL (8)":     8,
+        "SD3 (16)":     16,
+        "Flux (16)":    16,
+        "HiDream (32)": 32,
         "通用安全 (64)": 64,
     }
 
@@ -434,6 +595,7 @@ class DivisibleCrop:
                         "根据目标扩散模型自动选择整除倍数：\n"
                         "SD1.5 / SDXL → 8\n"
                         "SD3 / Flux → 16\n"
+                        "HiDream → 32\n"
                         "通用安全 → 64（兼容几乎所有模型 / 分块采样）"
                     ),
                 }),
@@ -510,7 +672,6 @@ class BatchImageSaver:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
                 "输出文件夹": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -529,12 +690,29 @@ class BatchImageSaver:
                         "仅 PNG 生效，JPG/WEBP 一律不写入"
                     ),
                 }),
+                "覆盖已有文件": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "True = 同名文件直接覆盖（接原文件名时推荐）；False = 自动加 _1 _2 防止覆盖",
+                }),
             },
             "optional": {
+                "images": ("IMAGE", {
+                    "tooltip": "不接时只保存文本文件",
+                }),
                 "原文件名": ("STRING", {
                     "default": "",
                     "forceInput": True,
-                    "tooltip": "接 Folder Image Loader 的 filename 输出，自动用原文件名命名",
+                    "tooltip": "接 Folder Image Loader / Folder Text Loader 的 filename 输出，自动用原文件名命名",
+                }),
+                "text": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "tooltip": "纯文本内容，与图片同名保存为 .txt 文件",
+                }),
+                "json": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "tooltip": "JSON 内容，与图片同名保存为 .json 文件（接 Ideogram4 Text Encode 的 json_text 输出）",
                 }),
             },
             "hidden": {
@@ -558,12 +736,15 @@ class BatchImageSaver:
 
     def save(
         self,
-        images: torch.Tensor,
         输出文件夹: str,
         文件格式: str = "png",
         质量: int = 100,
         嵌入工作流: bool = True,
+        覆盖已有文件: bool = True,
+        images=None,
         原文件名: str = "",
+        text: str = "",
+        json: str = "",
         prompt=None,
         extra_pnginfo=None,
     ):
@@ -572,59 +753,79 @@ class BatchImageSaver:
 
         out_dir = self._resolve_dir(输出文件夹)
 
-        if images.ndim == 3:
-            images = images.unsqueeze(0)
-        N = images.shape[0]
-
-        # 原文件名可能是单个字符串或换行分隔多个
+        # ── 原文件名列表 ──────────────────────────────────────────────────────
         src_names: list[str] = []
         if 原文件名:
             src_names = [s.strip() for s in 原文件名.splitlines() if s.strip()]
+
+        # ── 确定循环次数：有图片按图片数，纯 txt 模式按文件名数（至少 1 条）──
+        if images is not None:
+            if images.ndim == 3:
+                images = images.unsqueeze(0)
+            N = images.shape[0]
+        else:
+            N = max(len(src_names), 1)
 
         ext = 文件格式.lower()
         saved: list[str] = []
 
         for i in range(N):
-            pil = tensor_to_pil(images[i])
-
-            # ── 决定文件名：有原文件名则同步，否则按编号 ──
+            # ── 决定文件名 ──
             if src_names:
                 src  = src_names[i] if i < len(src_names) else src_names[-1]
                 stem = Path(src).stem
             else:
                 stem = f"img_{i + 1:05d}"
 
-            # ── 同名自动加 _1 _2 后缀防覆盖 ──
-            fpath = out_dir / f"{stem}.{ext}"
-            k = 1
-            while fpath.exists():
-                fpath = out_dir / f"{stem}_{k}.{ext}"
-                k += 1
+            # ── 文件名碰撞处理 ──
+            base_path = out_dir / f"{stem}.{ext}"
+            if not 覆盖已有文件:
+                k = 1
+                while (base_path.exists()
+                       or (text and base_path.with_suffix(".txt").exists())
+                       or (json and base_path.with_suffix(".json").exists())):
+                    base_path = out_dir / f"{stem}_{k}.{ext}"
+                    k += 1
+            fpath = base_path
 
-            # ── 保存参数 ──
-            kw: dict = {}
-            if ext == "jpg":
-                kw = {"quality": int(质量), "optimize": True}
-                pil = pil.convert("RGB")
-            elif ext == "webp":
-                kw = {"quality": int(质量), "method": 6}
-            else:  # png
-                kw = {"compress_level": 4}
-                if 嵌入工作流:
-                    from PIL.PngImagePlugin import PngInfo
-                    meta = PngInfo()
-                    if prompt is not None:
-                        meta.add_text("prompt", json.dumps(prompt))
-                    if extra_pnginfo is not None:
-                        for k2, v2 in extra_pnginfo.items():
-                            meta.add_text(k2, json.dumps(v2))
-                    kw["pnginfo"] = meta
+            # ── 保存图片（有 images 时）────────────────────────────────────
+            if images is not None:
+                pil = tensor_to_pil(images[i])
+                kw: dict = {}
+                if ext == "jpg":
+                    kw = {"quality": int(质量), "optimize": True}
+                    pil = pil.convert("RGB")
+                elif ext == "webp":
+                    kw = {"quality": int(质量), "method": 6}
+                else:  # png
+                    kw = {"compress_level": 4}
+                    if 嵌入工作流:
+                        from PIL.PngImagePlugin import PngInfo
+                        meta = PngInfo()
+                        if prompt is not None:
+                            meta.add_text("prompt", json_module.dumps(prompt))
+                        if extra_pnginfo is not None:
+                            for k2, v2 in extra_pnginfo.items():
+                                meta.add_text(k2, json_module.dumps(v2))
+                        kw["pnginfo"] = meta
+                pil.save(str(fpath), **kw)
+                saved.append(str(fpath))
+                print(f"[BatchImageSaver] 已保存: {fpath}")
 
-            pil.save(str(fpath), **kw)
-            saved.append(str(fpath))
-            print(f"[BatchImageSaver] 已保存: {fpath}")
+            # ── 保存 text → .txt ─────────────────────────────────────────────
+            if text:
+                txt_path = fpath.with_suffix(".txt")
+                txt_path.write_text(text, encoding="utf-8")
+                print(f"[BatchImageSaver] 已保存: {txt_path}")
 
-        print(f"[BatchImageSaver] 共保存 {len(saved)} 张 → {out_dir}")
+            # ── 保存 json → .json ────────────────────────────────────────────
+            if json:
+                json_path = fpath.with_suffix(".json")
+                json_path.write_text(json, encoding="utf-8")
+                print(f"[BatchImageSaver] 已保存: {json_path}")
+
+        total = len(saved) if images is not None else 0
+        print(f"[BatchImageSaver] 完成 → {out_dir}  (图片 {total} 张)")
         return {}
 
 
@@ -916,10 +1117,14 @@ class SeamlessTileFixer:
     """
 
     _METHODS       = ["偏移混合法（保持尺寸）"]
-    _GRID_SIZES    = ["1×1", "2×2", "3×3", "4×4"]
-    _BLEND_LEVELS  = ["柔和", "标准", "强"]
-    _BLEND_RATIOS  = {"柔和": 0.05, "标准": 0.10, "强": 0.20}
-    _GRID_COUNTS   = {"1×1": 1, "2×2": 2, "3×3": 3, "4×4": 4}
+    _GRID_SIZES    = ["1×1", "1×2", "2×1", "2×2", "3×3", "4×4"]
+    _BLEND_LEVELS  = ["柔和", "标准", "强", "极强"]
+    _BLEND_RATIOS  = {"柔和": 0.10, "标准": 0.18, "强": 0.30, "极强": 0.45}
+    # 预览格数 → (行, 列)
+    _GRID_COUNTS   = {
+        "1×1": (1, 1), "1×2": (1, 2), "2×1": (2, 1),
+        "2×2": (2, 2), "3×3": (3, 3), "4×4": (4, 4),
+    }
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -936,14 +1141,14 @@ class SeamlessTileFixer:
     RETURN_NAMES  = ("无缝贴图", "平铺预览")
     FUNCTION      = "fix"
     CATEGORY      = "Louis_use"
-    DESCRIPTION   = "偏移50%+交叉混合，生成四边无缝平铺贴图，附 N×N 平铺预览"
+    DESCRIPTION   = "偏移50%+交叉混合，生成四边无缝平铺贴图，附 行×列 平铺预览"
 
     def fix(self, image: torch.Tensor, 方法: str, 预览格数: str, 混合强度: str):
         if image.ndim == 3:
             image = image.unsqueeze(0)
 
-        blend_ratio = self._BLEND_RATIOS.get(混合强度, 0.10)
-        grid_n      = self._GRID_COUNTS.get(预览格数, 3)
+        blend_ratio  = self._BLEND_RATIOS.get(混合强度, 0.10)
+        rows, cols   = self._GRID_COUNTS.get(预览格数, (3, 3))
 
         results, previews = [], []
         for i in range(image.shape[0]):
@@ -952,7 +1157,7 @@ class SeamlessTileFixer:
             seamless = self._offset_blend(arr, blend_ratio)
             results.append(torch.from_numpy(seamless).unsqueeze(0))
             previews.append(torch.from_numpy(
-                self._tiled_preview(seamless, grid_n)
+                self._tiled_preview(seamless, rows, cols)
             ).unsqueeze(0))
 
         return (torch.cat(results), torch.cat(previews))
@@ -961,8 +1166,10 @@ class SeamlessTileFixer:
     def _offset_blend(arr: np.ndarray, blend_ratio: float) -> np.ndarray:
         """
         1. 将图像在 X/Y 各偏移 50%（接缝移到中央）
-        2. 以余弦权重对中央接缝两侧对称像素对做交叉混合
-        3. 结果四边无缝，中央过渡平滑
+        2. 对中央接缝两侧对称像素对做羽化交叉混合：
+           接缝正中 w=0.5（两侧取平均 → 完全连续，无硬线），
+           向外按余弦平滑羽化到 w=0（不改动），过渡自然柔和。
+        3. 结果四边无缝，中央过渡平滑无硬缝
         """
         H, W = arr.shape[:2]
 
@@ -979,9 +1186,8 @@ class SeamlessTileFixer:
         for i in range(bh):
             row_a = (cy - i - 1) % H   # 接缝上方行
             row_b = (cy + i)     % H   # 接缝下方行
-            # 越靠近接缝权重越大（mix 更多对方内容）
-            t = (i + 0.5) / bh          # 0→1，从接缝处到混合边界
-            w = 0.5 - 0.5 * math.cos(math.pi * (1.0 - t))   # 接缝处 w≈1，边界处 w≈0
+            t = (i + 0.5) / bh                      # 0（接缝）→1（边界）
+            w = 0.25 * (1.0 + math.cos(math.pi * t))  # 接缝处 w=0.5，边界处 w=0
             a = result[row_a].copy()
             b = result[row_b].copy()
             result[row_a] = (1.0 - w) * a + w * b
@@ -992,7 +1198,7 @@ class SeamlessTileFixer:
             col_a = (cx - i - 1) % W
             col_b = (cx + i)     % W
             t = (i + 0.5) / bw
-            w = 0.5 - 0.5 * math.cos(math.pi * (1.0 - t))
+            w = 0.25 * (1.0 + math.cos(math.pi * t))
             a = result[:, col_a].copy()
             b = result[:, col_b].copy()
             result[:, col_a] = (1.0 - w) * a + w * b
@@ -1001,9 +1207,9 @@ class SeamlessTileFixer:
         return result.clip(0.0, 1.0)
 
     @staticmethod
-    def _tiled_preview(arr: np.ndarray, n: int) -> np.ndarray:
-        """将无缝贴图平铺成 n×n，缩放到不超过 1024px。"""
-        tiled = np.tile(arr, (n, n, 1))
+    def _tiled_preview(arr: np.ndarray, rows: int, cols: int) -> np.ndarray:
+        """将无缝贴图平铺成 rows×cols（行×列），缩放到不超过 1024px。"""
+        tiled = np.tile(arr, (rows, cols, 1))
         H, W = tiled.shape[:2]
         max_px = 1024
         if H > max_px or W > max_px:
@@ -1020,6 +1226,27 @@ class SeamlessTileFixer:
 # ─────────────────────────────────────────────────────────────────────────────
 # HuggingFace 下载公共工具（TextSegmenter / AutoMatter 共用）
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _ensure_pkg(import_name: str, pip_spec: str):
+    """
+    确保某依赖可用，不可用则用当前解释器 pip 自动安装/升级。
+    import_name: 用于检测的模块路径，如 'timm.layers'
+    pip_spec:    安装规格，如 'timm>=1.0.0'
+    """
+    import importlib, importlib.util, subprocess, sys
+    try:
+        if importlib.util.find_spec(import_name) is not None:
+            return
+    except (ImportError, ModuleNotFoundError, ValueError):
+        pass  # 父包版本太旧时 find_spec 可能抛错，继续安装
+
+    print(f"[Louis_use] 缺少依赖 {import_name}，正在自动安装 {pip_spec} …")
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "-U", pip_spec,
+    ])
+    importlib.invalidate_caches()
+    print(f"[Louis_use] {pip_spec} 安装完成 ✓")
+
 
 def _make_hf_forced_tqdm():
     """返回一个始终显示进度条的 tqdm 子类（Windows CMD 非 TTY 友好）。"""
@@ -1156,6 +1383,9 @@ class TextSegmenter:
     def _get_birefnet(cls):
         key = "birefnet"
         if key not in cls._cache:
+            # BiRefNet 远程代码依赖 timm>=0.9（需 timm.layers），旧版会报
+            # ModuleNotFoundError: No module named 'timm.layers'，此处自动修复
+            _ensure_pkg("timm.layers", "timm>=1.0.0")
             from transformers import AutoModelForImageSegmentation
             from huggingface_hub import snapshot_download
             # 判断是首次下载还是直接从本地缓存加载
@@ -1401,6 +1631,9 @@ class TextSegmentedDepth:
     def _get_birefnet(cls):
         key = "birefnet"
         if key not in cls._cache:
+            # BiRefNet 远程代码依赖 timm>=0.9（需 timm.layers），旧版会报
+            # ModuleNotFoundError: No module named 'timm.layers'，此处自动修复
+            _ensure_pkg("timm.layers", "timm>=1.0.0")
             from transformers import AutoModelForImageSegmentation
             from huggingface_hub import snapshot_download
             try:
@@ -1557,10 +1790,249 @@ class TextSegmentedDepth:
         )
 
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 导出
+# 节点 — ImagePadColor（向图像四周扩展纯色边框）
 # ─────────────────────────────────────────────────────────────────────────────
 
+class ImagePadColor:
+    """
+    在原图四周扩展纯色边框（默认黑色），用于补足画布、加边、letterbox 等场景。
+    • 上/下/左/右 像素数可独立设置，互不影响
+    • color：前端色轮选色，默认 #000000 黑色
+    • 输入 RGB → 输出 RGB；输入 RGBA → 输出 RGBA（新增区域 alpha=1，完全不透明）
+    • 同时输出新画布的宽高，方便接后续节点
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image":  ("IMAGE",),
+                "top":    ("INT", {"default": 200, "min": 0, "max": 8192, "step": 1,
+                                   "tooltip": "顶部扩展像素数"}),
+                "bottom": ("INT", {"default": 200, "min": 0, "max": 8192, "step": 1,
+                                   "tooltip": "底部扩展像素数"}),
+                "left":   ("INT", {"default": 200, "min": 0, "max": 8192, "step": 1,
+                                   "tooltip": "左侧扩展像素数"}),
+                "right":  ("INT", {"default": 200, "min": 0, "max": 8192, "step": 1,
+                                   "tooltip": "右侧扩展像素数"}),
+                "color":  ("COLOR", {"default": "#000000",
+                                     "tooltip": "扩展区域填充色，默认黑色"}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "INT", "INT")
+    RETURN_NAMES = ("image", "width", "height")
+    FUNCTION     = "pad"
+    CATEGORY     = "Louis_use"
+    DESCRIPTION  = "在原图四周扩展指定像素的纯色边框（颜色可选，默认黑）"
+
+    @staticmethod
+    def _parse_color(hex_str: str):
+        """解析 #rgb 或 #rrggbb → (r, g, b) float 0-1"""
+        h = hex_str.strip().lstrip("#")
+        if len(h) == 3:
+            h = h[0]*2 + h[1]*2 + h[2]*2
+        r = int(h[0:2], 16) / 255.0
+        g = int(h[2:4], 16) / 255.0
+        b = int(h[4:6], 16) / 255.0
+        return r, g, b
+
+    def pad(self, image: torch.Tensor, top: int, bottom: int,
+            left: int, right: int, color: str):
+        if image.ndim == 3:
+            image = image.unsqueeze(0)
+
+        B, H, W, C = image.shape
+        new_H = H + top + bottom
+        new_W = W + left + right
+
+        if top == bottom == left == right == 0:
+            return (image, int(W), int(H))
+
+        r, g, b = self._parse_color(color)
+        # 与输入通道数对齐（3 或 4）；alpha 通道扩展区填 1.0（不透明）
+        fill = [r, g, b] + ([1.0] if C == 4 else [])
+        fill_t = torch.tensor(fill, dtype=image.dtype, device=image.device)
+
+        canvas = fill_t.view(1, 1, 1, C).expand(B, new_H, new_W, C).clone()
+        canvas[:, top:top + H, left:left + W, :] = image
+
+        return (canvas, int(new_W), int(new_H))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 节点 — ImageComposite（图像合成 / 混合模式叠加）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ImageComposite:
+    """
+    将前景图像叠加到背景图像上。
+    • 两路 IMAGE 输入均支持 RGB（3通道）和 RGBA（4通道）透明图
+    • foreground_mask（可选）：用遮罩覆盖前景 alpha 通道；有遮罩时前景图的
+      原始 alpha 被替换，无遮罩时沿用前景图自带的 alpha（无则视为全不透明）
+    • 14 种 Photoshop 标准混合模式
+    • opacity 参数控制前景整体不透明度
+    • 若背景带 alpha 通道，输出也带 alpha；否则输出 RGB
+    • 前景尺寸与背景不一致时自动双线性缩放对齐
+    """
+
+    BLEND_MODES = [
+        "正常 (Normal)",
+        "正片叠底 (Multiply)",
+        "滤色 (Screen)",
+        "叠加 (Overlay)",
+        "柔光 (Soft Light)",
+        "强光 (Hard Light)",
+        "颜色减淡 (Color Dodge)",
+        "颜色加深 (Color Burn)",
+        "线性减淡/加 (Linear Dodge)",
+        "线性加深 (Linear Burn)",
+        "差值 (Difference)",
+        "排除 (Exclusion)",
+        "变亮 (Lighten)",
+        "变暗 (Darken)",
+    ]
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "background":  ("IMAGE",),
+                "foreground":  ("IMAGE",),
+                "blend_mode":  (cls.BLEND_MODES, {"default": "正常 (Normal)"}),
+                "opacity":     ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0,
+                    "step": 0.01, "display": "slider",
+                }),
+            },
+            "optional": {
+                "foreground_mask": ("MASK",),   # 覆盖前景 alpha；(B,H,W) 或 (H,W)，0-1
+            },
+        }
+
+    RETURN_TYPES  = ("IMAGE",)
+    RETURN_NAMES  = ("image",)
+    FUNCTION      = "composite"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = "将前景叠加到背景，支持遮罩 alpha、RGBA 透明、14 种混合模式及不透明度"
+
+    # ── 混合模式 ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _blend(bg: torch.Tensor, fg: torch.Tensor, mode: str) -> torch.Tensor:
+        """bg / fg: (B, H, W, 3) float32 0-1；返回混合颜色（不含 alpha）"""
+        eps = 1e-7
+        if "正常" in mode:
+            return fg
+        if "正片叠底" in mode:
+            return bg * fg
+        if "滤色" in mode:
+            return 1.0 - (1.0 - bg) * (1.0 - fg)
+        if "叠加" in mode:
+            return torch.where(bg < 0.5,
+                               2.0 * bg * fg,
+                               1.0 - 2.0 * (1.0 - bg) * (1.0 - fg))
+        if "柔光" in mode:
+            # W3C Composite Level 1 — Soft Light
+            d = torch.where(bg <= 0.25,
+                            ((16.0 * bg - 12.0) * bg + 4.0) * bg,
+                            bg.clamp(min=0.0).sqrt())
+            return torch.where(fg <= 0.5,
+                               bg - (1.0 - 2.0 * fg) * bg * (1.0 - bg),
+                               bg + (2.0 * fg - 1.0) * (d - bg))
+        if "强光" in mode:
+            return torch.where(fg < 0.5,
+                               2.0 * bg * fg,
+                               1.0 - 2.0 * (1.0 - bg) * (1.0 - fg))
+        if "颜色减淡" in mode:
+            return (bg / (1.0 - fg + eps)).clamp(0.0, 1.0)
+        if "颜色加深" in mode:
+            return (1.0 - (1.0 - bg) / (fg + eps)).clamp(0.0, 1.0)
+        if "线性减淡" in mode:
+            return (bg + fg).clamp(0.0, 1.0)
+        if "线性加深" in mode:
+            return (bg + fg - 1.0).clamp(0.0, 1.0)
+        if "差值" in mode:
+            return (bg - fg).abs()
+        if "排除" in mode:
+            return bg + fg - 2.0 * bg * fg
+        if "变亮" in mode:
+            return torch.max(bg, fg)
+        if "变暗" in mode:
+            return torch.min(bg, fg)
+        return fg  # 兜底 fallback
+
+    def composite(
+        self,
+        background:       torch.Tensor,
+        foreground:        torch.Tensor,
+        blend_mode:        str,
+        opacity:           float,
+        foreground_mask:   torch.Tensor | None = None,
+    ) -> tuple:
+        import torch.nn.functional as F
+
+        device = background.device
+        foreground = foreground.to(device=device, dtype=background.dtype)
+
+        # ── 批次广播对齐 ─────────────────────────────────────────────────────
+        B = max(background.shape[0], foreground.shape[0])
+        if background.shape[0] == 1 and B > 1:
+            background = background.expand(B, -1, -1, -1)
+        if foreground.shape[0] == 1 and B > 1:
+            foreground = foreground.expand(B, -1, -1, -1)
+
+        # ── 拆分 RGB / Alpha ─────────────────────────────────────────────────
+        has_bg_alpha = background.shape[-1] == 4
+        bg_rgb   = background[..., :3]                            # (B,H,W,3)
+        bg_alpha = (background[..., 3:4] if has_bg_alpha
+                    else torch.ones(B, background.shape[1], background.shape[2], 1,
+                                    device=device, dtype=background.dtype))
+
+        fg_rgb   = foreground[..., :3]
+
+        # ── 前景 alpha 来源：外部遮罩 > 图像自带 alpha > 全1 ────────────────
+        if foreground_mask is not None:
+            # MASK: (B,H,W) 或 (H,W) → 统一到 (B,H,W,1)
+            m = foreground_mask.to(device=device, dtype=background.dtype)
+            if m.dim() == 2:
+                m = m.unsqueeze(0)                    # (1,H,W)
+            if m.shape[0] == 1 and B > 1:
+                m = m.expand(B, -1, -1)
+            fg_alpha = m.unsqueeze(-1)                # (B,H,W,1)
+        elif foreground.shape[-1] == 4:
+            fg_alpha = foreground[..., 3:4]
+        else:
+            fg_alpha = torch.ones(B, foreground.shape[1], foreground.shape[2], 1,
+                                  device=device, dtype=foreground.dtype)
+
+        # ── 前景尺寸对齐到背景 ───────────────────────────────────────────────
+        H, W = background.shape[1], background.shape[2]
+
+        def _resize_hwc(t: torch.Tensor) -> torch.Tensor:
+            """(B,H,W,C) → bilinear resize → (B,H,W,C)"""
+            return F.interpolate(
+                t.permute(0, 3, 1, 2),
+                size=(H, W),
+                mode="bilinear",
+                align_corners=False,
+            ).permute(0, 2, 3, 1)
+
+        if fg_rgb.shape[1] != H or fg_rgb.shape[2] != W:
+            fg_rgb = _resize_hwc(fg_rgb)
+        if fg_alpha.shape[1] != H or fg_alpha.shape[2] != W:
+            fg_alpha = _resize_hwc(fg_alpha)
+
+        # ── 混合模式 + Alpha 合成（Porter-Duff "over"）───────────────────────
+        blended      = self._blend(bg_rgb, fg_rgb, blend_mode).clamp(0.0, 1.0)
+        fg_alpha_eff = (fg_alpha * opacity).clamp(0.0, 1.0)
+
+        out_rgb   = (blended * fg_alpha_eff + bg_rgb * (1.0 - fg_alpha_eff)).clamp(0.0, 1.0)
+        out_alpha = (fg_alpha_eff + bg_alpha * (1.0 - fg_alpha_eff)).clamp(0.0, 1.0)
+
+        out = torch.cat([out_rgb, out_alpha], dim=-1) if has_bg_alpha else out_rgb
+        return (out,)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1584,42 +2056,86 @@ class ImageFlipHorizontal:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 节点 — ImageToGrayscale（黑白转换）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ImageInvert:
+    """图像颜色反转（黑变白、白变黑）。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",)}}
+
+    RETURN_TYPES  = ("IMAGE",)
+    RETURN_NAMES  = ("image",)
+    FUNCTION      = "invert"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = "图像颜色反转，黑变白、白变黑"
+
+    def invert(self, image: torch.Tensor) -> tuple:
+        if image.ndim == 3:
+            image = image.unsqueeze(0)
+        out = image.clone()
+        out[..., :3] = 1.0 - image[..., :3]   # RGB 反转，alpha 不动
+        return (out,)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 节点 — TimerStop
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 每个完成的 ProgressBar 耗时按顺序入队，TimerStop 依次出队
 from collections import deque
+
+# 全局队列（兜底）+ per-node 字典（精确归因）
 _bar_queue: deque = deque()
+_node_bar_timings: dict = {}           # unique_id (str) → duration (float)
+_currently_executing_node_id: str | None = None
 
 
 def _reset_bar_queue():
     _bar_queue.clear()
+    _node_bar_timings.clear()
 
 
 def _patch_executor():
-    """prompt 开始时清空队列。"""
+    """prompt 开始时清空队列；per-node execute 时记录当前 node_id。"""
     try:
         import execution
-        _orig = execution.PromptExecutor.execute
 
-        def _hooked(self, prompt, prompt_id, *args, **kwargs):
+        # ─── 外层：per-prompt 重置 ───
+        _orig_outer = execution.PromptExecutor.execute
+
+        def _hooked_outer(self, prompt, prompt_id, *args, **kwargs):
             _reset_bar_queue()
-            return _orig(self, prompt, prompt_id, *args, **kwargs)
+            return _orig_outer(self, prompt, prompt_id, *args, **kwargs)
 
-        execution.PromptExecutor.execute = _hooked
+        execution.PromptExecutor.execute = _hooked_outer
+
+        # ─── 内层：async def execute(server, dynprompt, caches, current_item, ...) ───
+        _orig_inner = execution.execute
+
+        async def _hooked_inner(server, dynprompt, caches, current_item, *args, **kwargs):
+            global _currently_executing_node_id
+            _currently_executing_node_id = str(current_item) if current_item is not None else None
+            try:
+                return await _orig_inner(server, dynprompt, caches, current_item, *args, **kwargs)
+            finally:
+                _currently_executing_node_id = None
+
+        execution.execute = _hooked_inner
         print("[Louis_use] TimerStop: executor 钩子注入成功 ✓")
     except Exception as e:
         print(f"[Louis_use] TimerStop: executor 钩子注入失败（{e}）")
 
 
-_MIN_STEPS = 4  # 步数低于此的进度条（模型加载等）不计入队列
+_MIN_STEPS = 4  # 步数低于此的进度条（模型加载等）不计入
 
 
 def _patch_progress_bar():
-    """每个 ProgressBar 完成时将耗时入队，开始时间存在实例上避免全局冲突。"""
+    """ProgressBar 完成时将耗时存入 per-node 字典和兜底队列。"""
     try:
         import comfy.utils
-        _orig_init = comfy.utils.ProgressBar.__init__
+        _orig_init   = comfy.utils.ProgressBar.__init__
         _orig_update = comfy.utils.ProgressBar.update_absolute
 
         def _hooked_init(self, total):
@@ -1628,14 +2144,18 @@ def _patch_progress_bar():
 
         def _hooked_update(self, value, total=None, preview=None):
             result = _orig_update(self, value, total, preview)
-            start = getattr(self, "_louis_start", None)
+            start  = getattr(self, "_louis_start", None)
             if start is not None and self.total and self.current >= self.total:
                 if self.total >= _MIN_STEPS:
-                    _bar_queue.append(time.perf_counter() - start)
+                    duration = time.perf_counter() - start
+                    _bar_queue.append(duration)
+                    nid = _currently_executing_node_id
+                    if nid:
+                        _node_bar_timings[nid] = duration
                 self._louis_start = None
             return result
 
-        comfy.utils.ProgressBar.__init__ = _hooked_init
+        comfy.utils.ProgressBar.__init__       = _hooked_init
         comfy.utils.ProgressBar.update_absolute = _hooked_update
         print("[Louis_use] TimerStop: ProgressBar 钩子注入成功 ✓")
     except Exception as e:
@@ -1644,6 +2164,30 @@ def _patch_progress_bar():
 
 _patch_executor()
 _patch_progress_bar()
+
+
+def _find_upstream_timing(unique_id, prompt):
+    """BFS 向上游遍历 prompt 图，找到最近的有计时数据的节点，返回其耗时（秒）。"""
+    if not unique_id or not prompt:
+        return None
+    visited: set = set()
+    queue = [str(unique_id)]
+    first = True
+    while queue:
+        node_id = queue.pop(0)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        if not first and node_id in _node_bar_timings:
+            return _node_bar_timings[node_id]
+        first = False
+        node_data = prompt.get(node_id, {})
+        for val in node_data.get("inputs", {}).values():
+            if isinstance(val, list) and len(val) >= 2 and isinstance(val[0], (str, int)):
+                uid = str(val[0])
+                if uid not in visited:
+                    queue.append(uid)
+    return None
 
 
 class TimerStop:
@@ -1659,32 +2203,232 @@ class TimerStop:
                 "image": ("IMAGE",),
                 "prefix": ("STRING", {"default": "生成耗时: ", "multiline": False}),
             },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "prompt":    "PROMPT",
+            },
         }
 
-    RETURN_TYPES  = ("STRING",)
-    RETURN_NAMES  = ("time_str",)
+    RETURN_TYPES  = ("STRING", "FLOAT")
+    RETURN_NAMES  = ("time_str", "elapsed_sec")
     FUNCTION      = "stop"
     CATEGORY      = "Louis_use"
-    DESCRIPTION   = "输出本次生成的耗时（秒/毫秒），接在 VAEDecode 后面使用"
+    DESCRIPTION   = "输出本次生成的耗时；time_str 供显示，elapsed_sec（秒）供 BatchImageSaver 嵌入元数据"
 
-    def stop(self, image, prefix: str):
-        duration = _bar_queue.popleft() if _bar_queue else None
+    def stop(self, image, prefix: str, unique_id=None, prompt=None):
+        duration = _find_upstream_timing(unique_id, prompt)
         if duration is None:
-            time_str = f"{prefix}--:--"
+            duration = _bar_queue.popleft() if _bar_queue else None
+        if duration is None:
+            time_str    = f"{prefix}--:--"
+            elapsed_sec = 0.0
         else:
-            m = int(duration) // 60
-            s = int(duration) % 60
-            time_str = f"{prefix}{m:02d}:{s:02d}"
+            m           = int(duration) // 60
+            s           = int(duration) % 60
+            time_str    = f"{prefix}{m:02d}:{s:02d}"
+            elapsed_sec = round(duration, 2)
 
-        print(f"[TimerStop] {time_str}")
-        return (time_str,)
+        print(f"[TimerStop] {time_str}  ({elapsed_sec}s)")
+        return (time_str, elapsed_sec)
 
     @classmethod
-    def IS_CHANGED(cls, image, prefix):
-        return float("nan")  # 每次都重新执行
+    def IS_CHANGED(cls, image, prefix, unique_id=None, prompt=None):
+        return float("nan")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 节点 — VRAMMonitor
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VRAMMonitor:
+    """
+    接在 VAEDecode 后面，读取本次生成的峰值显存占用。
+    vram_gb  → 接 BatchImageSaver 的 vram_gb 输入，自动嵌入 PNG 元数据。
+    vram_str → 供文字显示节点使用。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            }
+        }
+
+    RETURN_TYPES  = ("FLOAT", "STRING")
+    RETURN_NAMES  = ("vram_gb", "vram_str")
+    FUNCTION      = "measure"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = "测量本次生成的峰值显存占用（GB），接在 VAEDecode 后"
+
+    def measure(self, image):
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_bytes = torch.cuda.max_memory_allocated()
+                torch.cuda.reset_peak_memory_stats()
+                vram_gb = round(vram_bytes / (1024 ** 3), 2)
+            else:
+                vram_gb = 0.0
+        except Exception as e:
+            print(f"[VRAMMonitor] 读取失败: {e}")
+            vram_gb = 0.0
+
+        vram_str = f"显存占用: {vram_gb:.2f} GB"
+        print(f"[VRAMMonitor] {vram_str}")
+        return (vram_gb, vram_str)
+
+    @classmethod
+    def IS_CHANGED(cls, image):
+        return float("nan")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 节点 — TimerVRAM（合并计时 + 显存，图片直通，自动写入任意保存节点）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TimerVRAM:
+    """
+    计时 + 显存二合一节点。
+    · 图片直通（image in → image out），放在 VAEDecode 和任意保存节点之间即可。
+    · 通过 extra_pnginfo 隐藏机制，自动把 louis_gen_time / louis_vram_gb
+      注入到同一 prompt 里所有保存节点（官方 Save Image、BatchImageSaver 等均生效）。
+    · 输出 time_str / vram_str 可接文字显示节点，elapsed_sec / vram_gb 可选接或不接。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            },
+            "hidden": {
+                "prompt":        "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id":     "UNIQUE_ID",
+            },
+        }
+
+    RETURN_TYPES  = ("IMAGE", "STRING", "STRING", "FLOAT", "FLOAT")
+    RETURN_NAMES  = ("image", "time_str", "vram_str", "elapsed_sec", "vram_gb")
+    FUNCTION      = "run"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = (
+        "计时 + 显存二合一。图片直通，数据自动嵌入任意保存节点的 PNG 元数据。"
+        "time_str / vram_str 可选接文字显示，elapsed_sec / vram_gb 可不接。"
+    )
+
+    def run(self, image, prompt=None, extra_pnginfo=None, unique_id=None):
+        # ── 显存 ──
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_bytes = torch.cuda.max_memory_allocated()
+                torch.cuda.reset_peak_memory_stats()
+                vram_gb = round(vram_bytes / (1024 ** 3), 2)
+            else:
+                vram_gb = 0.0
+        except Exception:
+            vram_gb = 0.0
+
+        # ── 耗时：优先从 per-node 字典精确取，兜底用队列 ──
+        duration = _find_upstream_timing(unique_id, prompt)
+        if duration is None:
+            duration = _bar_queue.popleft() if _bar_queue else None
+        elapsed_sec = round(duration, 2) if duration else 0.0
+
+        # ── 格式化字符串 ──
+        if elapsed_sec > 0:
+            m, s     = int(elapsed_sec) // 60, int(elapsed_sec) % 60
+            time_str = f"生成耗时: {m:02d}:{s:02d}"
+        else:
+            time_str = "生成耗时: --:--"
+        vram_str = f"显存占用: {vram_gb:.2f} GB"
+
+        # ── 注入 extra_pnginfo（任意保存节点都会读取） ──
+        if isinstance(extra_pnginfo, dict):
+            if elapsed_sec > 0:
+                extra_pnginfo["louis_gen_time"] = elapsed_sec
+            if vram_gb > 0:
+                extra_pnginfo["louis_vram_gb"]  = vram_gb
+
+        print(f"[TimerVRAM] {time_str}  |  {vram_str}")
+        return (image, time_str, vram_str, elapsed_sec, vram_gb)
+
+    @classmethod
+    def IS_CHANGED(cls, image, prompt=None, extra_pnginfo=None, unique_id=None):
+        return float("nan")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 节点 — ShowText（在节点上显示文本，方便复制）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ShowText:
+    """
+    在节点上直接显示输入的字符串，便于查看 / 选中复制（例如 QwenVL 生成的 prompt）。
+    · 输入 text（STRING，forceInput），接上游字符串输出
+    · 输出 text（STRING）原样透传，可继续接 CLIPTextEncode 等下游节点
+    · 节点本身是 OUTPUT_NODE，运行后文本回填到节点显示，并写入工作流
+      widgets_values，刷新/重开工作流仍然可见。
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"forceInput": True}),
+            },
+            "hidden": {
+                "unique_id":     "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    INPUT_IS_LIST = True
+    RETURN_TYPES  = ("STRING",)
+    RETURN_NAMES  = ("text",)
+    OUTPUT_IS_LIST = (True,)
+    OUTPUT_NODE   = True
+    FUNCTION      = "show"
+    CATEGORY      = "Louis_use"
+    DESCRIPTION   = "在节点上显示输入文本，方便选中复制（搭配 QwenVL 等文本生成节点）"
+
+    def show(self, text, unique_id=None, extra_pnginfo=None):
+        # text 是 list（INPUT_IS_LIST=True）
+        texts = list(text) if isinstance(text, list) else [text]
+        texts = [str(t) for t in texts]
+
+        # 把文本注入工作流节点的 widgets_values，使下次打开仍可见
+        try:
+            if unique_id and extra_pnginfo and isinstance(extra_pnginfo, list):
+                meta = extra_pnginfo[0]
+                if isinstance(meta, dict) and "workflow" in meta:
+                    uid = unique_id[0] if isinstance(unique_id, list) else unique_id
+                    for n in meta["workflow"].get("nodes", []):
+                        if str(n.get("id")) == str(uid):
+                            n["widgets_values"] = texts
+                            break
+        except Exception as e:
+            print(f"[Louis_use_ShowText] 写入 widgets_values 失败: {e}")
+
+        return {"ui": {"text": texts}, "result": (texts,)}
+
+
+from .ideogram4_text_encode import (
+    NODE_CLASS_MAPPINGS        as _IDGTE_CLASS,
+    NODE_DISPLAY_NAME_MAPPINGS as _IDGTE_DISPLAY,
+)
+
+from .ip_copyright_guard import (
+    NODE_CLASS_MAPPINGS        as _IPG_CLASS,
+    NODE_DISPLAY_NAME_MAPPINGS as _IPG_DISPLAY,
+)
 
 
 NODE_CLASS_MAPPINGS = {
+    "Louis_use_ResolutionSelector":    ResolutionSelector,
+    "Louis_use_FolderTextLoader":      FolderTextLoader,
     "Louis_use_FolderImageLoader":     FolderImageLoader,
     "Louis_use_SmartAlignCrop":        SmartAlignCrop,
     "Louis_use_ReflectionExtractor":   ReflectionExtractor,
@@ -1698,14 +2442,26 @@ NODE_CLASS_MAPPINGS = {
     "Louis_use_TextSegmenter":         TextSegmenter,
     # 文字驱动目标深度图（Depth-Anything-V2 + GDINO + BiRefNet）
     "Louis_use_TextSegmentedDepth":    TextSegmentedDepth,
+    # 图像四周扩展纯色边框
+    "Louis_use_ImagePadColor":         ImagePadColor,
+    # 图像合成（混合模式叠加）
+    "Louis_use_ImageComposite":        ImageComposite,
     # 图像翻转
     "Louis_use_ImageFlipHorizontal":   ImageFlipHorizontal,
-    # 生成耗时计时
-    "Louis_use_TimerStop":             TimerStop,
+    # 黑白转换
+    "Louis_use_ImageInvert":            ImageInvert,
+    # 性能追踪（计时 + 显存二合一）
+    "Louis_use_TimerVRAM":             TimerVRAM,
+    # 显示文本（搭配 QwenVL 等文本生成节点）
+    "Louis_use_ShowText":              ShowText,
+    **_IDGTE_CLASS,
+    **_IPG_CLASS,
 }
 
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "Louis_use_ResolutionSelector":    "📐 Resolution Selector",
+    "Louis_use_FolderTextLoader":      "📄 Folder Text Loader",
     "Louis_use_FolderImageLoader":     "📂 Folder Image Loader",
     "Louis_use_SmartAlignCrop":        "✂️ Smart Align & Crop",
     "Louis_use_ReflectionExtractor":   "✨ Reflection Extractor",
@@ -1715,7 +2471,13 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Louis_use_ColorMatch":            "🎨 Color Match",
     "Louis_use_SeamlessTileFixer":     "🧩 Seamless Tile Fixer",
     "Louis_use_TextSegmenter":         "✂️ Text Segmenter",
-    "Louis_use_TextSegmentedDepth":    "🚗 Text Segmented Depth",
+    "Louis_use_TextSegmentedDepth":    "🚗 汽车深度图",
+    "Louis_use_ImagePadColor":         "🖼️ Image Pad Color",
+    "Louis_use_ImageComposite":        "🖼️ Image Composite",
     "Louis_use_ImageFlipHorizontal":   "↔️ Image Flip Horizontal",
-    "Louis_use_TimerStop":             "⏱️ Timer Stop",
+    "Louis_use_ImageInvert":            "🔄 Image Invert",
+    "Louis_use_TimerVRAM":             "📊 Performance Tracker",
+    "Louis_use_ShowText":              "📝 Show Text",
+    **_IDGTE_DISPLAY,
+    **_IPG_DISPLAY,
 }

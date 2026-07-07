@@ -8,3 +8,4 @@
 transformers>=4.30.0
 huggingface_hub>=0.16.0
 torchvision>=0.15.0
+timm>=1.0.0  # BiRefNet 远程代码需要 timm.layers（timm>=0.9）

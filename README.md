@@ -1,6 +1,4 @@
-**[English](README_en.md) | 中文**
-
-# Louis Use — ComfyUI 自定义节点
+# Louis Use — ComfyUI Custom Nodes
 
 一组实用的 ComfyUI 自定义节点，涵盖文件夹批量 I/O、图像裁剪、色彩工具、无缝贴图、文字驱动抠图等常用功能。
 
@@ -14,7 +12,7 @@
 **方法二：手动克隆**
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/LouisLU1997/ComfyUI-louis-use Louis_use
+git clone https://github.com/YOUR_USERNAME/comfyui-louis-use Louis_use
 # 重启 ComfyUI
 ```
 
@@ -30,29 +28,31 @@ pip install -r requirements.txt
 ### 📂 文件夹 I/O
 
 #### Folder Image Loader
-从文件夹读取全部图片，以 LIST 模式逐张送入下游节点，节点内置缩略图预览，支持原生文件夹选择对话框。
+从文件夹批量加载图片，节点内置缩略图预览，支持原生文件夹选择对话框。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `folder_path` | STRING | 图片文件夹路径 |
+| `sort_by` | 枚举 | 排序方式：`name` / `date` / `size` |
+| `start_index` | INT | 从第几张开始（0-based） |
+| `max_images` | INT | 最多加载几张（0 = 全部） |
 
-**输出：** `image` / `mask` / `filename`（每张图独立输出，下游节点自动逐张执行）
+**输出：** `images` / `masks` / `filenames_json` / `total_count`
 
 支持格式：`.png .jpg .jpeg .webp .bmp .tiff .tif .gif`
 
 ---
 
 #### Batch Image Saver
-批量保存图片到指定文件夹，可接入 Folder Image Loader 的文件名自动同步原文件名。
+批量保存图片到指定文件夹，每次执行自动创建 `前缀_时间戳` 子文件夹。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `images` | IMAGE | 要保存的图片 batch |
-| `输出文件夹` | STRING | 保存目录（绝对路径或相对 output 目录） |
-| `文件格式` | 枚举 | `png` / `jpg` / `webp` |
-| `质量` | INT | JPG/WEBP 压缩质量（1-100，PNG 忽略） |
-| `嵌入工作流` | BOOLEAN | 是否将工作流写入 PNG 元数据 |
-| `原文件名` | STRING | 可选，接 Folder Image Loader 的 filename，自动同名保存 |
+| `output_folder` | STRING | 保存根目录 |
+| `filename_prefix` | STRING | 文件名前缀 |
+| `format` | 枚举 | `png` / `jpg` / `webp` |
+| `quality` | INT | JPG/WEBP 质量（1-100） |
 
 ---
 
@@ -152,7 +152,22 @@ pip install -r requirements.txt
 | `transformers` | Text Segmenter / Text Segmented Depth |
 | `huggingface_hub` | 模型自动下载 |
 | `torchvision` | Text Segmenter 预处理 |
-| `aiohttp` | 后端 API 路由 |
+| `aiohttp` | 后端 API 路由（文件夹对话框 / 缩略图） |
+
+---
+
+## 文件结构
+
+```
+Louis_use/
+├── __init__.py          节点注册 + API 挂载
+├── nodes.py             所有节点实现
+├── api.py               后端路由（文件夹对话框 / 缩略图预览 / 图片计数）
+├── js/
+│   └── folder_io.js     前端扩展（缩略图画布、滚轮、文件夹选择按钮）
+├── requirements.txt
+└── pyproject.toml
+```
 
 ---
 
