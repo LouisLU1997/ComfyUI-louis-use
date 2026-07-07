@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-louis-use"
-version = "1.0.0"
+version = "1.0.1"
 description = "A collection of ComfyUI utility nodes: folder I/O, image crop, color tools, seamless tile, text-driven segmentation and more."
 license = { file = "LICENSE" }
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/YOUR_USERNAME/comfyui-louis-use"
+Repository = "https://github.com/LouisLU1997/ComfyUI-louis-use"
 
 [tool.comfy]
 PublisherId = "louis"
