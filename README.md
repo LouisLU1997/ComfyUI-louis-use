@@ -1,175 +1,137 @@
-# Louis Use — ComfyUI Custom Nodes
+﻿# Louis Use - ComfyUI Custom Nodes
 
-一组实用的 ComfyUI 自定义节点，涵盖文件夹批量 I/O、图像裁剪、色彩工具、无缝贴图、文字驱动抠图等常用功能。
+A practical ComfyUI custom node pack for batch folder I/O, image utilities, color tools, seamless texture workflows, prompt conversion, performance tracking, and optional QwenVL-based image/IP screening.
 
----
+> Package folder name for manual installs: `Louis_use`
 
-## 安装
+## Features
 
-**方法一：ComfyUI Manager（推荐）**  
-在 ComfyUI Manager 中搜索 `Louis Use` 一键安装。
+- Folder batch loading and saving with preview UI
+- Resolution selector with Chinese aspect-ratio labels
+- Smart crop, divisible crop, padding, compositing, flip and invert tools
+- Color palette extraction and color matching
+- Seamless tile fixer with 1x1, 1x2, 2x1, 2x2, 3x3 and 4x4 preview modes
+- Performance Tracker for generation time and VRAM metadata
+- Ideogram 4 structured prompt encoder with optional QwenVL semantic conversion
+- Optional text-driven segmentation/depth helpers
+- Optional QwenVL image copyright/IP guard (`image -> image`)
 
-**方法二：手动克隆**
+## Installation
+
+### ComfyUI Manager
+
+Search for `Louis Use` in ComfyUI Manager and install it.
+
+### Manual install
+
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/YOUR_USERNAME/comfyui-louis-use Louis_use
-# 重启 ComfyUI
+git clone https://github.com/LouisLU1997/ComfyUI-louis-use Louis_use
 ```
 
-**依赖安装**
+Restart ComfyUI after installation.
+
+### Dependencies
+
+Most core nodes only need packages that ship with ComfyUI, such as `torch`, `Pillow`, `numpy`, and `aiohttp`.
+
+For all optional nodes, install:
+
 ```bash
 pip install -r requirements.txt
 ```
 
----
+Optional heavy features may download additional models on first use:
 
-## 节点列表
+- Text Segmenter / Text Segmented Depth: Grounding DINO, BiRefNet, Depth-Anything related models
+- Ideogram4 Qwen mode / Copyright Guard: requires the separate `ComfyUI-QwenVL` custom node and a QwenVL checkpoint
 
-### 📂 文件夹 I/O
+## Nodes
 
-#### Folder Image Loader
-从文件夹批量加载图片，节点内置缩略图预览，支持原生文件夹选择对话框。
+### Folder I/O
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `folder_path` | STRING | 图片文件夹路径 |
-| `sort_by` | 枚举 | 排序方式：`name` / `date` / `size` |
-| `start_index` | INT | 从第几张开始（0-based） |
-| `max_images` | INT | 最多加载几张（0 = 全部） |
+| Node | Description |
+| --- | --- |
+| Folder Text Loader | Load `.txt` files from a folder as strings. |
+| Folder Image Loader | Load image batches from a folder with frontend thumbnail preview. |
+| Batch Image Saver | Save image batches, optional `.txt`/`.json` sidecars, overwrite toggle, metadata support. |
 
-**输出：** `images` / `masks` / `filenames_json` / `total_count`
+### Resolution and Image Utilities
 
-支持格式：`.png .jpg .jpeg .webp .bmp .tiff .tif .gif`
+| Node | Description |
+| --- | --- |
+| Resolution Selector | Convert aspect-ratio labels such as `16:9 横屏` to width/height. |
+| Smart Align & Crop | Align and crop to a target resolution. |
+| Divisible Crop | Crop to dimensions divisible by 8/16/32 or custom divisor. |
+| Image Pad Color | Pad image edges with a chosen color. |
+| Image Composite | Composite foreground over background with common blend modes. |
+| Image Flip Horizontal | Batch-safe horizontal image flip. |
+| Image Invert | RGB color inversion. |
+| Reflection Extractor | Extract bright reflection/highlight regions. |
 
----
+### Color Tools
 
-#### Batch Image Saver
-批量保存图片到指定文件夹，每次执行自动创建 `前缀_时间戳` 子文件夹。
+| Node | Description |
+| --- | --- |
+| Color Palette Extractor | Extract dominant colors and output a palette visualization. |
+| Color Match | Match image color statistics to a reference image. |
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `images` | IMAGE | 要保存的图片 batch |
-| `output_folder` | STRING | 保存根目录 |
-| `filename_prefix` | STRING | 文件名前缀 |
-| `format` | 枚举 | `png` / `jpg` / `webp` |
-| `quality` | INT | JPG/WEBP 质量（1-100） |
+### Seamless Texture
 
----
+| Node | Description |
+| --- | --- |
+| Seamless Tile Fixer | Offset-blend image into a tileable texture and output a tiled preview. |
 
-### ✂️ 图像裁剪
+Preview modes include `1x1`, `1x2`, `2x1`, `2x2`, `3x3`, and `4x4`.
 
-#### Smart Align & Crop
-按锚点对齐并裁剪图像到目标分辨率，支持九宫格定位。
+### Text / AI Helpers
 
-#### Divisible Crop
-将图像裁剪到可被指定数整除的尺寸，常用于对齐 VAE 要求（8/16/32px 倍数）。
+| Node | Description |
+| --- | --- |
+| Ideogram4 Text Encode | Convert descriptions into Ideogram 4 style structured JSON and CLIP conditioning. Optional QwenVL mode can analyze semantics and reference-image colors. |
+| Show Text | Display and persist string output directly on the node. |
+| Text Segmenter | Text-driven object segmentation using detection + matting models. |
+| Text Segmented Depth | Text-driven target depth-map extraction. |
+| Copyright Guard | QwenVL-based `image -> image` screening node. Blocks suspicious images and can cooperate with the frontend auto-requeue helper. |
 
----
+### Performance
 
-### 🎨 色彩工具
+| Node | Description |
+| --- | --- |
+| Performance Tracker | Image passthrough node that records generation time and peak VRAM, and injects metadata for save nodes. |
 
-#### Color Palette Extractor
-提取图片主要颜色，按面积占比生成竖条色谱可视化图，用于配色分析。
+## QwenVL Optional Features
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `num_colors` | INT | 提取颜色数量（2-20） |
-| `min_ratio` | FLOAT | 最小占比阈值（过滤极少数颜色） |
+`Ideogram4 Text Encode` Qwen mode and `Copyright Guard` require `ComfyUI-QwenVL`.
 
-**输出：** `palette_image`（色谱图）
+Install `ComfyUI-QwenVL` separately, then use a VRAM-friendly quantization option such as `4-bit (VRAM-friendly)` if needed. These nodes degrade gracefully when QwenVL is not installed, but the Qwen-powered function itself will not run.
 
----
+## Publishing / Comfy Registry
 
-#### Color Match
-将图像色调对齐到参考图，用于修复分块放大后的色漂问题。
+This repository includes:
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `method` | 枚举 | `mean_std` / `mvgd` / `wavelet` / `histogram` |
-| `strength` | FLOAT | 对齐强度（0=不变，1=完全对齐） |
-| `enabled` | BOOLEAN | 一键开关，方便对比 |
+- `pyproject.toml` with `[tool.comfy]` metadata
+- `.github/workflows/publish.yml` using `Comfy-Org/publish-node-action`
 
-推荐方法：`wavelet`（只换色调，保留细节）
+To publish to the Comfy Registry, add a GitHub secret named `REGISTRY_ACCESS_TOKEN`, then push to `main`/`master` or run the workflow manually.
 
----
+## File Structure
 
-### 🧩 无缝贴图
-
-#### Seamless Tile Fixer
-将任意图像处理为可无缝平铺的贴图（偏移混合法），并生成平铺预览图。
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `混合强度` | 枚举 | 柔和 / 标准 / 强 |
-| `预览格数` | 枚举 | 1×1 / 2×2 / 3×3 / 4×4 |
-
-**输出：** `无缝贴图` / `平铺预览`
-
----
-
-### ✂️ 文字驱动抠图与深度
-
-#### Text Segmenter
-两阶段精细抠图：Grounding DINO 文字定位 + BiRefNet 高质量抠图。
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `文字提示` | STRING | 英文，多目标用 `. ` 分隔；留空=自动抠前景 |
-| `识别严格度` | FLOAT | 0.05~0.95，越高越严格 |
-| `推理分辨率` | 枚举 | 512 / 1024 / 1536 / 2048 |
-| `羽化半径` | INT | 遮罩边缘羽化像素数 |
-
-**输出：** `抠图` / `遮罩` / `预览`  
-首次运行自动下载 Grounding DINO Tiny（~340 MB）和 BiRefNet（~1 GB）。
-
----
-
-#### Text Segmented Depth
-文字驱动目标深度图：Grounding DINO 定位 + Depth-Anything-V2 深度估计 + BiRefNet 前景遮罩融合。
-
-**输出：** `depth_map` / `mask` / `preview`
-
----
-
-### 🔧 其他工具
-
-#### Reflection Extractor
-提取图像高光/反射区域遮罩。
-
-#### Image Flip Horizontal
-水平翻转图像（含 batch 支持）。
-
-#### Timer Stop
-生成耗时计时器，在节点上显示本次生成用时。
-
----
-
-## 依赖
-
-| 依赖 | 用途 |
-|------|------|
-| `torch` / `Pillow` / `numpy` | ComfyUI 自带，核心处理 |
-| `transformers` | Text Segmenter / Text Segmented Depth |
-| `huggingface_hub` | 模型自动下载 |
-| `torchvision` | Text Segmenter 预处理 |
-| `aiohttp` | 后端 API 路由（文件夹对话框 / 缩略图） |
-
----
-
-## 文件结构
-
-```
+```text
 Louis_use/
-├── __init__.py          节点注册 + API 挂载
-├── nodes.py             所有节点实现
-├── api.py               后端路由（文件夹对话框 / 缩略图预览 / 图片计数）
+├── __init__.py
+├── nodes.py
+├── ideogram4_text_encode.py
+├── ip_copyright_guard.py
+├── api.py
 ├── js/
-│   └── folder_io.js     前端扩展（缩略图画布、滚轮、文件夹选择按钮）
+│   ├── folder_io.js
+│   ├── resolution_selector.js
+│   ├── show_text.js
+│   └── ip_copyright_guard.js
 ├── requirements.txt
 └── pyproject.toml
 ```
-
----
 
 ## License
 
